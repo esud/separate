@@ -1,4 +1,4 @@
-SHAPSHOT (1.6.0)
+1.6.0 (09.10.2017)
 - migration to php7: strict types implemented
 - migration to php7: namespaces support implemented
 - class SeparateTemplate is renamed to Template 
