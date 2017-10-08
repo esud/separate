@@ -1,8 +1,8 @@
 <?php
 
 // +---------------------------------------------------------------------------+
-// | Separate Template Engine Version 1.5.0 (http://separate.esud.info/)       |
-// | Copyright 2004-2013 Eduard Sudnik                                         |
+// | Separate Template Engine Version 1.6.0 (http://separate.esud.info/)       |
+// | Copyright 2004-2017 Eduard Sudnik                                         |
 // |                                                                           |
 // | Permission is hereby granted, free of charge, to any person obtaining a   |
 // | copy of this software and associated documentation files (the "Software"),| 
@@ -23,94 +23,142 @@
 // | USE OR OTHER DEALINGS IN THE SOFTWARE.                                    |
 // +---------------------------------------------------------------------------+
 
-class SeparateTemplate
+namespace separate;
+
+class Template
 {
-    public static $instance;
-    public static $globalAssigns = array();
-    public static $globalXAssigns = array();
-    public static $filePath;
-    public static $defaultFormatter = null;
-    public static $parameters;
+    protected static $instance;
+    protected static $globalAssigns = [];
+    protected static $globalXAssigns = [];
+    protected static $filePath;
+    protected static $defaultFormatter = null;
+    protected static $parameters = [];
+    protected static $formatterCache = []; //used for better performance   
+
+    //HACK: this secret token is primary used to avoid PHP injections
+    //when prepared statements code like this is assigned to variable:
+    //<!-- IF true){} echo(time()); if(true --> ... <!-- END IF -->
+    protected static $secretToken = null;
 
     protected $source;
-    protected $assigns = array();
-    protected $blocks = array();
-    protected $xassigns = array();
-    protected $blockAssigns = array();
-    protected $blockXAssigns = array();
-    protected $formatterCache = array(); //used for better performance
+    protected $assigns = [];
+    protected $blocks = [];
+    protected $xassigns = [];
+    protected $blockAssigns = [];
+    protected $blockXAssigns = [];
 
-    //HACK: statement identifier is used to avoid PHP injection
-    //which is possible using prepared statements like this:
-    //<!-- IF true){} echo(time()); if(true --> ... <!-- END IF -->
-    protected $statementIdentifier = null;
-
-    public static function instance()
+    public static function instance() : Template
     {
         if(!self::$instance)
         {
-            self::$instance = new self();
+            throw new \Exception('Template not initialized');
         }
         return self::$instance;
     }
 
-    public static function booleanToString($value)
+    public static function booleanToString(bool $value) : string
     {
-        if($value == 1 || $value == '1' || $value) {return 'TRUE';}
+        if($value) {return 'TRUE';}
         return 'FALSE';
     }
 
-    public static function setDefaultFormatter(AbstractValueFormatter $formatter)
+    public static function setDefaultFormatter(ValueFormatter $formatter)
     {
         self::$defaultFormatter = $formatter;
     }
 
-    public static function getDefaultFormatter()
+    public static function getDefaultFormatter() : ValueFormatter
     {
         return self::$defaultFormatter;
     }
 
-    public static function getParameters()
+    public static function getParameters() : array
     {
         return self::$parameters;
     }
 
-    public static function setParameterValue($name, $value)
+    public static function setParameterValue(string $name, string $value)
     {
         self::$parameters[$name] = $value;
     }
 
-    public static function getParameterValue($name)
+    public static function initialize(string $filePath) : Template
     {
-        if(!self::isParameterSet($name))
+        //check file
+        if(!is_file($filePath))
         {
-            throw new Exception('Required parameter not found: ' . $name);
+            throw new \Exception('Template file not found: ' . $filePath);
         }
+  
+        self::$instance = new static(); 
+ 
+        self::$instance->assigns = [];
+        self::$instance->xassigns = [];
+        self::$instance->blocks = [];
+        self::$instance->blockAssigns = [];
+        self::$instance->blockXAssigns = [];
 
-        return self::$parameters[$name];
+        self::$globalAssigns = [];
+        self::$globalXAssigns = [];
+        self::$filePath = $filePath;
+        self::$parameters = [];
+        self::$formatterCache = [];
+
+        //source
+        self::$instance->source = file_get_contents(self::$filePath);
+
+        //file directory
+        $directory = strrev(stristr(strrev(self::$filePath), '/'));
+
+        //initialize includes
+        self::$instance->source = self::$instance->initializeIncludes(self::$instance->source, $directory);
+
+        //initialize parameters
+        self::$instance->initializeParameters();
+
+        //generate secret token
+        self::$secretToken = md5(uniqid(rand(), true));
+
+        //add secret token
+        self::$instance->source = self::$instance->addSecretToken(self::$instance->source);
+
+        //initialize blocks
+        self::$instance->initializeBlocks();
+
+        return self::instance();
     }
 
-    public static function isParameterSet($name)
+    public static function display() : string
     {
-        if(array_key_exists($name, self::$parameters))
+        if(!self::$instance)
         {
-            return true;
+            throw new \Exception('Template not initialized');
         }
 
-        return false;
-    }
+        //get compiled source
+        $source = self::$instance->compile();
 
-    function __construct()
-    {
-        self::$globalAssigns = array();
-        self::$globalXAssigns = array();
+        //create HTML source
+        ob_start();
+        eval('?' . '>' . $source); //HACK: by default in this function the php mode is active, so we disable it with php-end-token first
+        $compiledHtmlSource = ob_get_contents();
+        ob_end_clean();
+        
+        //remove secret token
+        $compiledHtmlSource = str_replace(self::$secretToken, '', $compiledHtmlSource);    
+
+        //output HTML source
+        echo($compiledHtmlSource);
+
+        //return compiled HTML source
+        return $compiledHtmlSource;
     }
 
     //checks if template variable is assigned using this priority:
-    //1. Local assigns
-    //2. Block assigns (of same template only)
-    //3. Global assigns
-    public function isAssigned($name)
+    //1. local assigns
+    //2. block assigns (of same template only)
+    //3. global assigns
+    public function isAssigned(string $name) : bool
     {
         //check local assigns
         if(isset($this->assigns[$name]))
@@ -135,10 +183,10 @@ class SeparateTemplate
     }
 
     //checks if fast template variable is assigned using this priority:
-    //1. Local fast assigns
-    //2. Block fast assigns (of same template only)
-    //3. Global fast assigns
-    public function isXAssigned($name)
+    //1. local fast assigns
+    //2. block fast assigns (of same template only)
+    //3. global fast assigns
+    public function isXAssigned(string $name) : bool
     {
         //check local fast assigns
         if(isset($this->xassigns[$name]))
@@ -161,108 +209,65 @@ class SeparateTemplate
         //not found
         return false;
     }
-
-    public function loadSourceFromFile($filePath)
-    {
-        $this->source = null;
-        $this->assigns = array();
-        $this->xassigns = array();
-        $this->blocks = null;
-        self::$globalAssigns = array();
-        self::$globalXAssigns = array();
-        self::$filePath = null;
-
-        //check file
-        if(!is_file($filePath))
-        {
-            throw new Exception('Template file not found (File path: ' . $filePath . ')');
-        }
-
-        //file path
-        self::$filePath = $filePath;
-
-        //source
-        $this->source = file_get_contents(self::$filePath);
-
-        //file directory
-        $directory = strrev(stristr(strrev(self::$filePath), '/'));
-
-        //initialize includes
-        $this->source = $this->initializeIncludes($this->source, $directory);
-
-        //initialize parameters
-        $this->initializeParameters();
-
-        //create statement identifier
-        $this->statementIdentifier = $this->createStatementIdentifier();
-
-        //add statement identifier
-        $this->source = $this->addStatementIdentifier($this->source);
-
-        //initialize blocks
-        $this->initializeBlocks();
-
-        return self::instance();
-    }
-
-    public function fetch($blockName)
+    
+    public function fetch(string $blockName) : Template
     {
         if(isset($this->blocks[$blockName]))
         {
             return clone $this->blocks[$blockName];
         }
 
-        throw new Exception('Unable to fetch block for block name: ' . $blockName);
+        throw new \Exception('Unable to fetch block for block name: ' . $blockName);
     }
 
-    public function assign($name, $value, $reassign = false)
+    public function assign(string $name, $value, bool $reassign = false)
     {
         //if block is assigned
         if(is_object($value))
         {
-            if(!($value instanceof SeparateTemplate))
+            if(!($value instanceof Template))
             {
-                throw new Exception('Invalid value assigned');
+                throw new \Exception('Invalid value assigned');
             }
 
-            if($reassign == false)
+            if(!$reassign)
             {
                 $this->assigns[$name][] = clone $value;
             }
             else
             {
-                $this->assigns[$name] = array();
+                $this->assigns[$name] = [];
                 $this->assigns[$name][0] = clone $value;
             }
         }
         //if variable is assigned
         else
-        {
-            if($reassign == false)
+        {  
+            if(!$reassign)
             {
-                $this->assigns[$name][] = $value;
+                $this->assigns[$name][] = (string)$value;
             }
             else
             {
-                $this->assigns[$name] = array();
-                $this->assigns[$name][0] = $value;
+                $this->assigns[$name] = [];
+                $this->assigns[$name][0] = (string)$value;
             }
         }
     }
 
-    public function xassign($name, $value) {$this->xassigns[$name] = $value;}
+    public function xassign(string $name, string $value) {$this->xassigns[$name] = $value;}
 
-    public function assignForGlobal($name, $value) {self::$globalAssigns[$name] = $value;}
+    public function assignForGlobal(string $name, string $value) {self::$globalAssigns[$name][0] = $value;}
 
-    public function xassignForGlobal($name, $value) {self::$globalXAssigns[$name] = $value;}
+    public function xassignForGlobal(string $name, string $value) {self::$globalXAssigns[$name] = $value;}
 
-    public function assignForBlock($name, $value) {$this->blockAssigns[$name] = $value;}
+    public function assignForBlock(string $name, string $value) {$this->blockAssigns[$name][0] = $value;}
 
-    public function xassignForBlock($name, $value) {$this->blockXAssigns[$name] = $value;}
+    public function xassignForBlock(string $name, string $value) {$this->blockXAssigns[$name] = $value;}
 
-    public function getVariableNames($includeBlocksFlag = true)
+    public function getVariableNames(bool $includeBlocksFlag = true) : array
     {
-        $variables = array();
+        $variables = [];
 
         //get variables of current block
         if(preg_match_all('(\${(.+?)})', $this->source, $matches))
@@ -304,9 +309,9 @@ class SeparateTemplate
         return $variables;
     }
 
-    public function getXVariableNames($includeBlocksFlag = true, $removeDuplicatesFlag = true)
+    public function getXVariableNames(bool $includeBlocksFlag = true, bool $removeDuplicatesFlag = true) : array
     {
-        $variables = array();
+        $variables = [];
 
         //get variables of current block
         if(preg_match_all('(\#{(.+?)})', $this->source, $matches))
@@ -333,9 +338,9 @@ class SeparateTemplate
         return $variables;
     }
 
-    public function getBlockNames($includeSubblocksFlag = true)
+    public function getBlockNames(bool $includeSubblocksFlag = true) : array
     {
-        $blocks = array();
+        $blocks = [];
 
         if(preg_match_all('(\${\(Block\)(.+)})', $this->source, $matches))
         {
@@ -359,130 +364,31 @@ class SeparateTemplate
         return $blocks;
     }
 
-    public function display()
-    {
-        //get compiled source
-        $source = $this->compile();
-
-        //create HTML source
-        ob_start();
-        eval('?>' . $source);
-        $compiledHtmlSource = ob_get_contents();
-        ob_end_clean();
-        
-        //remove statement identifier
-        //which was added in compilePhpUnsafeSource because of security
-        $compiledHtmlSource = str_replace($this->statementIdentifier, '', $compiledHtmlSource);    
-
-        //output HTML source
-        echo($compiledHtmlSource);
-
-        //return compiled HTML source
-        return $compiledHtmlSource;
-    }
-
-    private function compilePhpUnsafeSource($source)
-    {
-        //do not allow php indicators with '<script language='php'>'
-        $searchTokens = array('php', 'phP', 'pHp', 'pHP', 'Php', 'PhP', 'PHp', 'PHP');
-        $replaceTokens = array();
-        foreach($searchTokens as $token)
-        {
-            $replaceTokens[] = $this->statementIdentifier . $token;    
-        }
-        
-        //do not allow php begin indicators
-        $searchTokens[] = '<' . '?';
-        $replaceTokens[] = '<' . "?php echo('<' . '?'); ?>";
-        //
-        $searchTokens[] = '<' . '%';
-        $replaceTokens[] = '<' . "?php echo('<' . '%'); ?>";
-        
-        //perform source replace
-        return str_replace($searchTokens, $replaceTokens, $source);
-    }
-
-    private function compileComments($source)
+    private function compileComments(string $source) : string
     {
         //remove source comments
-        return preg_replace("/<!---\s+(.+?)\s+--->/ms", "", $source);
+        //HACK: here we replace comments with space. this is important because this 
+        //make php code injections like in following example not possible
+        //<<!--- dummy --->?p<!--- dummy --->hp echo(time()); ?_> (remove _ sign, it was added only because of code highlighting problem)
+        return preg_replace("/<!---\s+(.+?)\s+--->/ms", ' ', $source);
     }
 
-    private function compileIfStatements($source)
+    private function addSecretToken(string $source) : string
     {
-        //compile IF
-        $source = preg_replace("/" . $this->statementIdentifier . "<!-- IF (.+?) -->/ms", "<?php if(\$1) { ?>", $source);
-
-        //compile ELSE IF
-        $source = preg_replace("/" . $this->statementIdentifier . "<!-- ELSE IF (.+?) -->/ms", "<?php } elseif(\$1) { ?>", $source);
-
-        //compile ELSE
-        $source = preg_replace("/" . $this->statementIdentifier . "<!-- ELSE -->/ms", "<?php } else { ?>", $source);
-
-        //compile END IF
-        $source = preg_replace("/" . $this->statementIdentifier . "<!-- END IF -->/ms", "<?php } ?>", $source);
-
+        $source = str_replace('<!-- IF ', self::$secretToken . '<!-- IF ', $source);
+        $source = str_replace('<!-- ELSE IF ', self::$secretToken . '<!-- ELSE IF ', $source);
+        $source = str_replace('<!-- ELSE -->', self::$secretToken . '<!-- ELSE -->', $source);
+        $source = str_replace('<!-- END IF -->', self::$secretToken . '<!-- END IF -->', $source);
         return $source;
     }
 
-    private function compileGlobalXAssigns($source)
+    private function compileVariablesAndBlocks(array $assigns = [], array $xassigns = []) : string
     {
-        $searches = array();
-        $replaces = array();
-        foreach(self::$globalXAssigns as $key => $value)
-        {
-            $searches[] = '#{' . $key . '}';
-            $replaces[] = $value;
-        }
+        $blockAssigns = array_merge($assigns, $this->blockAssigns); //this assigns will be delegated to child blocks
+        $this->assigns = array_merge($blockAssigns, $this->assigns);
 
-        //return replaced source text
-        return str_replace($searches, $replaces, $source);
-    }
-
-    private function addStatementIdentifier($source)
-    {
-        $source = str_replace('<!-- IF ', $this->statementIdentifier . '<!-- IF ', $source);
-        $source = str_replace('<!-- ELSE IF ', $this->statementIdentifier . '<!-- ELSE IF ', $source);
-        $source = str_replace('<!-- ELSE -->', $this->statementIdentifier . '<!-- ELSE -->', $source);
-        $source = str_replace('<!-- END IF -->', $this->statementIdentifier . '<!-- END IF -->', $source);
-        return $source;
-    }
-
-    private function includeAssigns($assigns)
-    {
-        if($assigns == null)
-        {
-            return;
-        }
-
-        foreach($assigns as $name => $value)
-        {
-            $this->assigns[$name] = array();
-            $this->assigns[$name][0] = $value;
-        }
-    }
-
-    private function compileValiablesAndBlocks($assigns = array(), $xassigns = array())
-    {
-        //include global assigns
-        $this->includeAssigns(self::$globalAssigns);
-
-        //merge triggered block assigns and block
-        //assigns of this template to one array
-        $blockAssigns = array_merge($this->blockAssigns, $assigns);
-
-        //include triggered block assigns from parent
-        //template and block assigns of this template
-        $this->includeAssigns($blockAssigns);
-
-        //merge triggered fast block assigns and fast block
-        //assigns of this template to one array
-        $blockXAssigns = array_merge($this->blockXAssigns, $xassigns);
-
-        //include triggered fast block assigns from parent
-        //template and fast block assigns of this template
-        //HACK: no global fast assigns because they will be assigned once
-        $this->xassigns = array_merge($this->xassigns, $blockXAssigns);
+        $blockXAssigns = array_merge($xassigns, $this->blockXAssigns); //this xassigns will be delegated to child blocks
+        $this->xassigns = array_merge($blockXAssigns, $this->xassigns);
 
         //if nothing to assign
         if($this->assigns == null && $this->xassigns == null)
@@ -491,8 +397,7 @@ class SeparateTemplate
             return $this->source;
         }
 
-        $searches = array();
-        $replaces = array();
+        $searchReplacePairs = [];
 
         //handle normal assigns
         foreach($this->assigns as $key => $value)
@@ -505,16 +410,16 @@ class SeparateTemplate
                 //replace string
                 $replace = '';
 
-                //generate replace string for current key
+                //build replace string for current key
                 for($i = 0; $i < count($this->assigns[$key]); $i++)
                 {
-                    //is block assign
+                    //if block assign
                     if(is_object($this->assigns[$key][$i]))
                     {
                         //add compiled block source using block assigns
-                        $replace .= $this->assigns[$key][$i]->compileValiablesAndBlocks($blockAssigns, $blockXAssigns);
+                        $replace .= $this->assigns[$key][$i]->compileVariablesAndBlocks($blockAssigns, $blockXAssigns);
                     }
-                    //is variable assign
+                    //if variable assign
                     else
                     {
                         //string value
@@ -529,15 +434,15 @@ class SeparateTemplate
                     if($matches[2][$i] != 'Block' && $matches[2][$i] != '')
                     {
                         //initialize value formatter
-                        $formatterClass = $matches[2][$i] . 'Formatter';
-                        if(!isset($this->formatterCache[$formatterClass])) //if formatter instance is not cached
+                        $formatterClass = "\\" . $matches[2][$i] . 'Formatter';
+                        if(!isset(self::$formatterCache[$formatterClass])) //if formatter instance is not cached
                         {
                             //create formatter instance and add it to cache
-                            $this->formatterCache[$formatterClass] = new $formatterClass();
+                            self::$formatterCache[$formatterClass] = new $formatterClass(); 
                         }
 
                         //format value using given formatter
-                        $formattedReplace = $this->formatterCache[$formatterClass]->formatValue($replace);
+                        $formattedReplace = self::$formatterCache[$formatterClass]->formatValue($replace);
                     }
                     //if default formatter
                     elseif(self::$defaultFormatter != null && $matches[2][$i] != 'Block')
@@ -550,8 +455,7 @@ class SeparateTemplate
                         $formattedReplace = $replace;
                     }
 
-                    $searches[] = $matches[0][$i];
-                    $replaces[] = $formattedReplace;
+                    $searchReplacePairs[$matches[0][$i]] = $formattedReplace;
                 }
             }
         }
@@ -559,17 +463,19 @@ class SeparateTemplate
         //handle fast assigns
         foreach($this->xassigns as $key => $value)
         {
-            $searches[] = '#{' . $key . '}';
-            $replaces[] = $value;
+            $searchReplacePairs['#{' . $key . '}'] = $value;
         }
 
         //replace source text
-        $this->source = str_replace($searches, $replaces, $this->source);
-
+        //HACK: here we use strtr instead of str_replace to avoid variable injections where
+        //for example variable A is replaced with value BCD and C is another valiable which 
+        //will be replaced later with X. the problem is that BCD will be also replaced with BXD
+        $this->source = strtr($this->source, $searchReplacePairs);      
+  
         return $this->source;
     }
 
-    private function removeUnassignedVariables($source)
+    private function removeUnassignedVariables(string $source) : string
     {
         //remove variables for normal assigns
         $source = preg_replace('(\${.+?})', '', $source);
@@ -583,7 +489,7 @@ class SeparateTemplate
     private function initializeBlocks()
     {
         //retrieve block names
-        $blockNames = array();
+        $blockNames = [];
         $insideBlockFlag = false;
         $currentBlockName = null;
         foreach(explode("\n", $this->source) as $sourceRow)
@@ -621,7 +527,7 @@ class SeparateTemplate
         foreach($blockNames as $blockName)
         {
             //create new block template
-            $this->blocks[$blockName] = new SeparateTemplate();
+            $this->blocks[$blockName] = new Template();
             $this->blocks[$blockName]->loadBlockSource($this->determineBlockSource($this->source, $blockName));
 
             //replace block source with block variable
@@ -631,7 +537,7 @@ class SeparateTemplate
         }
     }
 
-    private function determineBlockName($sourceRow)
+    private function determineBlockName(string $sourceRow) : string
     {
         $startPosition = strpos($sourceRow, '<!-- BEGIN ');
         $commandLength = 11;
@@ -646,14 +552,14 @@ class SeparateTemplate
         return trim($blockName);
     }
 
-    private function determineBlockSource($source, $blockName)
+    private function determineBlockSource(string $source, string $blockName) : string
     {
         $blockSource = substr($source, strpos($source, '<!-- BEGIN ' . $blockName . ' -->') + strlen('<!-- BEGIN ' . $blockName . ' -->'));
         $blockSource = substr($blockSource, 0, strpos($blockSource, '<!-- END ' . $blockName . ' -->'));
         return $blockSource;
     }
 
-    private function initializeIncludes($source, $baseDirectory)
+    private function initializeIncludes(string $source, string $baseDirectory)
     {
         preg_match_all('/<!-- INCLUDE ([^>]*) -->/ms', $source, $matches);
         for ($i = 0; $i < count($matches[0]); $i++)
@@ -676,8 +582,6 @@ class SeparateTemplate
 
     private function initializeParameters()
     {
-        self::$parameters = array();
-
         //search for parameters
         preg_match_all("/<!-- PARAMETER ([0-9a-zA-Z._-]+) '(.+?)' -->/ms", $this->source, $matches);
 
@@ -694,19 +598,11 @@ class SeparateTemplate
             $this->source = str_replace($matches[0][$i], '', $this->source);
         }
     }
-
-    private function createStatementIdentifier()
-    {
-        return md5(uniqid(rand(), true));
-    }
     
-    private function compile()
+    private function compile() : string
     {
-        //compile variables and fast variables (no global fast assigns)
-        $source = $this->compileValiablesAndBlocks();
-
-        //compile global fast variables
-        $source = $this->compileGlobalXAssigns($source);
+        //compile variables, fast variables and blocks
+        $source = $this->compileVariablesAndBlocks(self::$globalAssigns, self::$globalXAssigns);
 
         //remove unassigned variables
         $source = $this->removeUnassignedVariables($source);
@@ -723,30 +619,65 @@ class SeparateTemplate
         return $source;
     }
     
-    //this method is used to load  source for block template.
+    //this method is used to load source for block template.
     //the main difference of this method is that no include
     //initialization and parameter initialization is required because
     //it is already done in root template
-    private function loadBlockSource($source)
+    private function loadBlockSource(string $source)
     {
-        $this->source = null;
-        $this->assigns = array();
-        $this->xassigns = array();
+        $this->assigns = [];
+        $this->xassigns = [];
         $this->blocks = null;
-
-        //source
         $this->source = $source;
 
         //initialize blocks
         $this->initializeBlocks();
+    }
 
-        return self::instance();
+    private function compilePhpUnsafeSource(string $source) : string
+    {
+        //do not allow php indicators with '<script language='php'>'
+        //HACK: support of this tag is removed from php7, however
+        //we leave it in code, in case someone uses customized php parser
+        $searchTokens = ['php', 'phP', 'pHp', 'pHP', 'Php', 'PhP', 'PHp', 'PHP'];
+        $replaceTokens = [];
+        foreach($searchTokens as $token)
+        {
+            $replaceTokens[] = self::$secretToken . $token;    
+        }
+        
+        //do not allow php begin indicators
+        $searchTokens[] = '<' . '?';
+        $replaceTokens[] = '<' . "?php echo('<' . '?'); ?>";
+        //
+        $searchTokens[] = '<' . '%';
+        $replaceTokens[] = '<' . "?php echo('<' . '%'); ?>";
+        
+        //perform source replace
+        return str_replace($searchTokens, $replaceTokens, $source);
+    }
+
+    private function compileIfStatements(string $source) : string
+    {
+        //compile IF
+        $source = preg_replace("/" . self::$secretToken . "<!-- IF (.+?) -->/ms", "<?php if(\$1) { ?>", $source);
+
+        //compile ELSE IF
+        $source = preg_replace("/" . self::$secretToken . "<!-- ELSE IF (.+?) -->/ms", "<?php } elseif(\$1) { ?>", $source);
+
+        //compile ELSE
+        $source = preg_replace("/" . self::$secretToken . "<!-- ELSE -->/ms", "<?php } else { ?>", $source);
+
+        //compile END IF
+        $source = preg_replace("/" . self::$secretToken . "<!-- END IF -->/ms", "<?php } ?>", $source);
+
+        return $source;
     }
 }
 
-abstract class AbstractValueFormatter 
+abstract class ValueFormatter 
 {
-    public abstract function formatValue($value);
+    public abstract function formatValue(string $value) : string;
 }
 
 ?>

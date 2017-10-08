@@ -1,8 +1,8 @@
 <?php
 
 // +---------------------------------------------------------------------------+
-// | Separate Template Engine Version 1.5.0 (http://separate.esud.info/)       |
-// | Copyright 2004-2013 Eduard Sudnik                                         |
+// | Separate Template Engine Version 1.6.0 (http://separate.esud.info/)       |
+// | Copyright 2004-2017 Eduard Sudnik                                         |
 // |                                                                           |
 // | Permission is hereby granted, free of charge, to any person obtaining a   |
 // | copy of this software and associated documentation files (the "Software"),| 
@@ -23,9 +23,9 @@
 // | USE OR OTHER DEALINGS IN THE SOFTWARE.                                    |
 // +---------------------------------------------------------------------------+
 
-class DateFormatter extends AbstractValueFormatter
+class DateFormatter extends \separate\ValueFormatter
 {
-    public function formatValue($value)
+    public function formatValue(string $value) : string
     {
         //check if value is numeric
         if(!is_numeric($value))
@@ -36,7 +36,7 @@ class DateFormatter extends AbstractValueFormatter
         }
 
         //create human readable date
-        return date('d.m.Y', $value); 
+        return date('d.m.Y', (int)$value); 
     }
 }
 
