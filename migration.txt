@@ -1,0 +1,35 @@
+MIGRATION FROM 1.5.0 TO 1.6.0
+- Rename SeparateTemplate to \separate\Template
+
+- When you use own ValueFormatter, you need to inherit it from 
+  \separate\ValueFormatter class. In addition, the more strict data type 
+  assignment (string) in the formatValue() method must be used for passed 
+  argument and the return value.
+
+  class MyFormatter extends \separate\ValueFormatter
+  {
+      public function formatValue(string $value) : string
+      {
+          //... 
+      }
+  }
+
+  All ValueFormatter classes are still in the global namespace.
+
+- Methods isParameterSet() and getParameterValue() are removed. When you use 
+  this methods in your code, you need to reimplement this functionality 
+  using getParameters() method.
+
+- Now you can use declare(strict_types = 1) when it is 
+  supported by another parts of your code.
+
+- The method loadSourceFromFile() is replaced 
+  with initialize() and is now static: 
+  \separate\Template::initialize(...);
+
+- The method display() is now static:
+  \separate\Template::display();
+
+- Before you can call the method instance() you 
+  need to initialize the template engine with initialize(...) 
+
