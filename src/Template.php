@@ -270,7 +270,7 @@ class Template
         $variables = [];
 
         //get variables of current block
-        if(preg_match_all('(\${(.+?)})', $this->source, $matches))
+        if(preg_match_all('(' . self::$secretToken . '\${(.+?)})', $this->source, $matches))
         {
             for ($i = 0; $i < count($matches[0]); $i++)
             {
@@ -314,7 +314,7 @@ class Template
         $variables = [];
 
         //get variables of current block
-        if(preg_match_all('(\#{(.+?)})', $this->source, $matches))
+        if(preg_match_all('(' . self::$secretToken . '\#{(.+?)})', $this->source, $matches))
         {
             $variables = $matches[1];
         }
@@ -342,7 +342,7 @@ class Template
     {
         $blocks = [];
 
-        if(preg_match_all('(\${\(Block\)(.+)})', $this->source, $matches))
+        if(preg_match_all('(' . self::$secretToken . '\${\(Block\)(.+)})', $this->source, $matches))
         {
             for ($i = 0; $i < count($matches[0]); $i++)
             {
@@ -379,6 +379,8 @@ class Template
         $source = str_replace('<!-- ELSE IF ', self::$secretToken . '<!-- ELSE IF ', $source);
         $source = str_replace('<!-- ELSE -->', self::$secretToken . '<!-- ELSE -->', $source);
         $source = str_replace('<!-- END IF -->', self::$secretToken . '<!-- END IF -->', $source);
+        $source = str_replace('${', self::$secretToken . '${', $source);
+        $source = str_replace('#{', self::$secretToken . '#{', $source);
         return $source;
     }
 
@@ -405,7 +407,7 @@ class Template
             $keyPattern = str_replace('[', '\[', str_replace(']', '\]', $key));
 
             //if current assign is used in the template source
-            if(preg_match_all('(\${(\(([a-zA-Z0-9]+)\)|)' . $keyPattern . '})', $this->source, $matches))
+            if(preg_match_all('(' . self::$secretToken . '\${(\(([a-zA-Z0-9]+)\)|)' . $keyPattern . '})', $this->source, $matches))
             {
                 //replace string
                 $replace = '';
@@ -463,7 +465,7 @@ class Template
         //handle fast assigns
         foreach($this->xassigns as $key => $value)
         {
-            $searchReplacePairs['#{' . $key . '}'] = $value;
+            $searchReplacePairs[self::$secretToken . '#{' . $key . '}'] = $value;
         }
 
         //replace source text
@@ -478,10 +480,10 @@ class Template
     private function removeUnassignedVariables(string $source) : string
     {
         //remove variables for normal assigns
-        $source = preg_replace('(\${.+?})', '', $source);
+        $source = preg_replace('(' . self::$secretToken . '\${.+?})', '', $source);
 
         //remove variables from fast assigns
-        $source = preg_replace('(\#{.+?})', '', $source);
+        $source = preg_replace('(' . self::$secretToken . '\#{.+?})', '', $source);
 
         return $source;
     }
@@ -532,7 +534,7 @@ class Template
 
             //replace block source with block variable
             $search = '/<!-- BEGIN (' . $blockName . ') -->(.*)<!-- END (' . $blockName . ') -->/ms';
-            $replace = '${(Block)' . $blockName . '}';
+            $replace = self::$secretToken . '${(Block)' . $blockName . '}';
             $this->source = preg_replace($search, $replace, $this->source);
         }
     }
